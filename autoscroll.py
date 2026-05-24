@@ -604,8 +604,17 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.start_keyboard_listener()
 
     def on_mode_changed(self, value):
+        old_mode = self.camera_mode
         self.camera_mode = "face" if value == "Cara" else "hand"
         self.update_mode_ui()
+        
+        # REINICIAR el hilo de cámara cuando cambie el modo
+        if self.camera_enabled:
+            self.camera_active = False
+            time.sleep(0.2)
+            self.camera_active = True
+            self.camera_thread = threading.Thread(target=self.camera_worker, daemon=True)
+            self.camera_thread.start()
 
     def update_mode_ui(self):
         if self.camera_mode == "face":
