@@ -6,3 +6,4 @@ pynput>=1.8.2
 # Dependencias para el control manos libres por cámara (opcionales pero recomendadas)
 opencv-python>=4.8.0
 Pillow>=10.0.0
+mediapipe>=0.10.0
