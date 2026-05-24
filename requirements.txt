@@ -1,0 +1,8 @@
+# Dependencias principales para MangaScroll Pro
+customtkinter>=5.2.2
+PyAutoGUI>=0.9.54
+pynput>=1.8.2
+
+# Dependencias para el control manos libres por cámara (opcionales pero recomendadas)
+opencv-python>=4.8.0
+Pillow>=10.0.0

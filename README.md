@@ -4,15 +4,42 @@
 
 ---
 
-## 🚀 Cómo Iniciar la Aplicación
+## 🚀 Instalación y Uso para otros usuarios
 
-Para ejecutar la aplicación, abre una terminal (PowerShell o CMD) en el directorio de la aplicación y ejecuta:
+Cualquier persona que descargue tu proyecto debe seguir estos pasos sencillos para ejecutarlo:
 
-```powershell
-.venv\Scripts\python.exe autoscroll.py
+### 1. Clonar el repositorio
+```bash
+git clone https://github.com/BrachoDB/AutoscrollParaVerManga.git
+cd AutoscrollParaVerManga
 ```
 
-Esto abrirá una interfaz gráfica oscura, moderna y limpia.
+### 2. Instalar las dependencias
+Se recomienda crear un entorno virtual e instalar las librerías necesarias mediante el archivo `requirements.txt`:
+
+* **En Windows:**
+  ```powershell
+  python -m venv .venv
+  .venv\Scripts\pip install -r requirements.txt
+  ```
+* **En macOS/Linux:**
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+### 3. Ejecutar la aplicación
+* **En Windows:**
+  ```powershell
+  .venv\Scripts\python.exe autoscroll.py
+  ```
+* **En macOS/Linux:**
+  ```bash
+  python autoscroll.py
+  ```
+
+Esto abrirá la interfaz gráfica oscura, moderna y limpia.
 
 ---
 
