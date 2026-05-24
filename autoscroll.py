@@ -883,14 +883,18 @@ class MangaAutoscrollerApp(ctk.CTk):
         if self.hand_detected and not self.hand_closed:
             # Mano abierta - activar scroll si no está activo
             if not self.is_scrolling:
+                print(f"[DEBUG] Mano abierta - activando scroll")
                 self.scroll_direction = "Bajar"
                 self.is_scrolling = True
                 self.after(0, self.update_status_ui)
         elif self.hand_closed:
             # Puño detectado - detener scroll
+            print(f"[DEBUG] Puño detectado - deteniendo scroll")
             if self.is_scrolling:
                 self.is_scrolling = False
                 self.after(0, self.update_status_ui)
+        else:
+            print(f"[DEBUG] Mano: detected={self.hand_detected}, closed={self.hand_closed}")
 
     def _process_face_mode(self, frame, face_cascade):
         if face_cascade is None:
