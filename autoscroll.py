@@ -40,6 +40,14 @@ except ImportError:
     MEDIPIPE_AVAILABLE = False
     mp = None
 
+# Intentar importar cvzone como alternativa más simple
+try:
+    from cvzone.HandTrackingModule import HandDetector
+    CVZONE_AVAILABLE = True
+except ImportError:
+    CVZONE_AVAILABLE = False
+    HandDetector = None
+
 import customtkinter as ctk
 
 # Configuración del tema visual de CustomTkinter
@@ -768,17 +776,21 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-        # Inicializar MediaPipe Hands si está disponible y modo es "hand"
-        hands = None
-        if self.camera_mode == "hand" and MEDIPIPE_AVAILABLE:
-            mp_hands = mp.solutions.hands
-            hands = mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=1,
-                min_detection_confidence=0.7,
-                min_tracking_confidence=0.7
-            )
-            mp_draw = mp.solutions.drawing_utils
+        # Inicializar detector de manos (cvzone o MediaPipe)
+        hand_detector = None
+        if self.camera_mode == "hand" and CVZONE_AVAILABLE:
+            hand_detector = HandDetector(maxHands=1, detectionCon=0.7)
+        elif self.camera_mode == "hand" and MEDIPIPE_AVAILABLE and mp:
+            try:
+                mp_hands = mp.solutions.hands
+                hand_detector = mp_hands.Hands(
+                    static_image_mode=False,
+                    max_num_hands=1,
+                    min_detection_confidence=0.7,
+                    min_tracking_confidence=0.7
+                )
+            except AttributeError:
+                hand_detector = None
 
         # Cargar el detector de rostros para modo cara
         face_cascade = None
@@ -805,8 +817,8 @@ class MangaAutoscrollerApp(ctk.CTk):
             frame = cv2.flip(frame, 1)
             h_frame, w_frame, _ = frame.shape
             
-            if self.camera_mode == "hand" and hands:
-                self._process_hand_mode(frame, hands, mp.solutions.drawing_utils)
+            if self.camera_mode == "hand" and hand_detector:
+                self._process_hand_mode(frame, hand_detector)
             elif face_cascade is not None:
                 self._process_face_mode(frame, face_cascade)
             else:
@@ -831,70 +843,68 @@ class MangaAutoscrollerApp(ctk.CTk):
         if self.cap:
             self.cap.release()
             self.cap = None
-        
-        if hands:
-            hands.close()
 
-    def _process_hand_mode(self, frame, hands, mp_draw):
-        h_frame, w_frame, _ = frame.shape
-        
-        # Convertir BGR a RGB para MediaPipe
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = hands.process(rgb_frame)
-        
+    def _process_hand_mode(self, frame, hand_detector):
         self.hand_detected = False
         self.hand_closed = False
         
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
+        # cvzone detecta manos automáticamente y dibuja
+        if CVZONE_AVAILABLE:
+            # cvzone detecta mano y devuelve lista de manos y frame modificado
+            hands, img = hand_detector.findHands(frame.copy(), draw=False)
+            
+            if hands:
                 self.hand_detected = True
                 
-                # Dibujar puntos clave y conexiones
-                mp_draw.draw_landmarks(
-                    frame, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS,
-                    mp_draw.DrawingSpec(color=(46, 204, 113), thickness=1, circle_radius=2),
-                    mp_draw.DrawingSpec(color=(46, 204, 113), thickness=1)
-                )
+                # Dibujar todos los puntos clave (21 puntos por mano)
+                hand = hands[0]  # Solo la primera mano
+                lmList = hand["lmList"]  # Lista de 21 landmarks
+                bbox = hand["bbox"]  # Bounding box
                 
-                # Obtener coordenadas de puntos clave
-                landmarks = hand_landmarks.landmark
+                # Dibujar puntos clave
+                for point in lmList:
+                    x, y = point[0], point[1]
+                    cv2.circle(frame, (x, y), 5, (46, 204, 113), -1)
                 
-                # Verificar si los dedos están cerrados (fórmula de distancia)
-                fingertips = [8, 12, 16, 20]  # Índice, medio, anular, meñique
-                mcp_joints = [5, 9, 13, 17]   # Articulaciones MCP
+                # Dibujar conexiones entre puntos (puntos clave de la mano)
+                connections = [
+                    (0, 1), (1, 2), (2, 3), (3, 4),       # Pulgar
+                    (0, 5), (5, 6), (6, 7), (7, 8),       # Índice
+                    (5, 9), (9, 10), (10, 11), (11, 12),  # Medio
+                    (9, 13), (13, 14), (14, 15), (15, 16), # Anular
+                    (13, 17), (17, 18), (18, 19), (19, 20), # Meñique
+                    (0, 5), (5, 9), (9, 13), (13, 17), (0, 17)  # Palma
+                ]
+                for start, end in connections:
+                    x1, y1 = lmList[start][0], lmList[start][1]
+                    x2, y2 = lmList[end][0], lmList[end][1]
+                    cv2.line(frame, (x1, y1), (x2, y2), (46, 204, 113), 2)
                 
-                closed_fingers = 0
-                for tip, mcp in zip(fingertips, mcp_joints):
-                    tip_y = landmarks[tip].y
-                    mcp_y = landmarks[mcp].y
-                    # Si la punta está más abajo que el MCP, el dedo está doblado
-                    if tip_y > mcp_y:
-                        closed_fingers += 1
+                # Detectar si es puño (punta de dedos más baja que articulaciones inferiores)
+                tips = [8, 12, 16, 20]   # Puntas de dedos (índice, medio, anular, meñique)
+                pips = [6, 10, 14, 18]   # Articulaciones PIP
                 
-                # Considerar puño si al menos 3 dedos están cerrados
-                self.hand_closed = closed_fingers >= 3
+                closed = 0
+                for tip, pip in zip(tips, pips):
+                    if lmList[tip][1] > lmList[pip][1]:
+                        closed += 1
                 
-                break  # Solo procesar una mano
-        
-        # Actualizar UI del estado de la mano
+                self.hand_closed = closed >= 3
+            else:
+                self.hand_detected = False
+                
+        # Actualizar UI
         self.after(0, self.update_hand_status_ui)
         
-        # Lógica de control: mano abierta activa scroll, puño detiene
+        # Lógica: mano abierta activa, puño detiene
         if self.hand_detected and not self.hand_closed:
-            # Mano abierta - activar scroll si no está activo
             if not self.is_scrolling:
-                print(f"[DEBUG] Mano abierta - activando scroll")
                 self.scroll_direction = "Bajar"
                 self.is_scrolling = True
                 self.after(0, self.update_status_ui)
-        elif self.hand_closed:
-            # Puño detectado - detener scroll
-            print(f"[DEBUG] Puño detectado - deteniendo scroll")
-            if self.is_scrolling:
-                self.is_scrolling = False
-                self.after(0, self.update_status_ui)
-        else:
-            print(f"[DEBUG] Mano: detected={self.hand_detected}, closed={self.hand_closed}")
+        elif self.hand_closed and self.is_scrolling:
+            self.is_scrolling = False
+            self.after(0, self.update_status_ui)
 
     def _process_face_mode(self, frame, face_cascade):
         if face_cascade is None:
