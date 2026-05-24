@@ -785,6 +785,9 @@ class MangaAutoscrollerApp(ctk.CTk):
         if self.camera_mode == "face":
             try:
                 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                # Verificar que la cascada se cargó correctamente
+                if face_cascade.empty():
+                    raise Exception("No se pudo cargar el clasificador Haar")
             except Exception as e:
                 print(f"Error al cargar cascada de rostros: {e}")
                 self.after(0, lambda: self.show_warning("Error al cargar detector facial."))
@@ -804,8 +807,13 @@ class MangaAutoscrollerApp(ctk.CTk):
             
             if self.camera_mode == "hand" and hands:
                 self._process_hand_mode(frame, hands, mp.solutions.drawing_utils)
-            else:
+            elif face_cascade is not None:
                 self._process_face_mode(frame, face_cascade)
+            else:
+                # Si estamos en modo cara pero no hay face_cascade, detener
+                if self.camera_mode == "face":
+                    self.camera_active = False
+                    break
 
             # Redimensionar el frame para la vista previa de la UI (240x180)
             frame_resized = cv2.resize(frame, (240, 180))
@@ -888,6 +896,8 @@ class MangaAutoscrollerApp(ctk.CTk):
                 self.after(0, self.update_status_ui)
 
     def _process_face_mode(self, frame, face_cascade):
+        if face_cascade is None:
+            return
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         faces = face_cascade.detectMultiScale(
