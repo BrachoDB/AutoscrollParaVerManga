@@ -1,0 +1,20 @@
+# Entorno virtual de Python
+.venv/
+env/
+venv/
+ENV/
+
+# Archivos de caché de Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Configuración de editores
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
