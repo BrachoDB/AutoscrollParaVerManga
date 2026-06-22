@@ -10,6 +10,16 @@ ENV/
 *.pyo
 *.pyd
 
+# Archivos temporales y de pruebas
+temp.txt
+test_hand_detection.py
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
 # Configuración de editores
 .vscode/
 .idea/
