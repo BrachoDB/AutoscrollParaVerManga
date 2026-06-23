@@ -35,10 +35,15 @@ except ImportError:
 # Intentar importar MediaPipe para control por gestos de mano
 try:
     import mediapipe as mp
+    from mediapipe.tasks.python.vision.hand_landmarker import HandLandmarker, HandLandmarkerOptions
+    from mediapipe.tasks.python.core.base_options import BaseOptions
     MEDIPIPE_AVAILABLE = True
 except ImportError:
     MEDIPIPE_AVAILABLE = False
     mp = None
+    HandLandmarker = None
+    HandLandmarkerOptions = None
+    BaseOptions = None
 
 import customtkinter as ctk
 
@@ -777,18 +782,17 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-        # Inicializar detector de manos con MediaPipe
+        # Inicializar detector de manos con MediaPipe Tasks API
         hand_detector = None
-        if self.camera_mode == "hand" and MEDIPIPE_AVAILABLE and mp:
+        if self.camera_mode == "hand" and MEDIPIPE_AVAILABLE and HandLandmarker:
             try:
-                mp_hands = mp.solutions.hands
-                hand_detector = mp_hands.Hands(
-                    static_image_mode=False,
-                    max_num_hands=1,
-                    min_detection_confidence=0.7,
-                    min_tracking_confidence=0.7
-                )
-            except AttributeError:
+                model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "hand_landmarker.task")
+                if os.path.exists(model_path):
+                    base_options = BaseOptions(model_asset_path=model_path)
+                    options = HandLandmarkerOptions(base_options=base_options, num_hands=1)
+                    hand_detector = HandLandmarker.create_from_options(options)
+            except Exception as e:
+                print(f"Error al inicializar HandLandmarker: {e}")
                 hand_detector = None
 
         # Cargar el detector de rostros para modo cara
@@ -847,34 +851,49 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.hand_detected = False
         self.hand_closed = False
         
-        if MEDIPIPE_AVAILABLE and hand_detector and mp:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = hand_detector.process(frame_rgb)
-            
-            if results.multi_hand_landmarks:
-                self.hand_detected = True
-                h, w, _ = frame.shape
-                hand_landmarks = results.multi_hand_landmarks[0]
+        if MEDIPIPE_AVAILABLE and hand_detector:
+            try:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                result = hand_detector.detect(mp_image)
                 
-                lmList = []
-                for lm in hand_landmarks.landmark:
-                    lmList.append([int(lm.x * w), int(lm.y * h), lm.z])
-                
-                mp.solutions.drawing_utils.draw_landmarks(
-                    frame, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS
-                )
-                
-                tips = [8, 12, 16, 20]
-                pips = [6, 10, 14, 18]
-                
-                closed = 0
-                for tip, pip in zip(tips, pips):
-                    if lmList[tip][1] > lmList[pip][1]:
-                        closed += 1
-                
-                self.hand_closed = closed >= 3
-            else:
-                self.hand_detected = False
+                if result.hand_landmarks:
+                    self.hand_detected = True
+                    h, w, _ = frame.shape
+                    hand_landmarks = result.hand_landmarks[0]
+                    
+                    lmList = []
+                    for lm in hand_landmarks:
+                        lmList.append([int(lm.x * w), int(lm.y * h), lm.z])
+                    
+                    connections = [
+                        (0, 1), (1, 2), (2, 3), (3, 4),
+                        (0, 5), (5, 6), (6, 7), (7, 8),
+                        (5, 9), (9, 10), (10, 11), (11, 12),
+                        (9, 13), (13, 14), (14, 15), (15, 16),
+                        (13, 17), (17, 18), (18, 19), (19, 20),
+                        (0, 17)
+                    ]
+                    for start, end in connections:
+                        if start < len(lmList) and end < len(lmList):
+                            cv2.line(frame, (lmList[start][0], lmList[start][1]),
+                                     (lmList[end][0], lmList[end][1]), (46, 204, 113), 2)
+                    for point in lmList:
+                        cv2.circle(frame, (point[0], point[1]), 5, (46, 204, 113), -1)
+                    
+                    tips = [8, 12, 16, 20]
+                    pips = [6, 10, 14, 18]
+                    
+                    closed = 0
+                    for tip, pip in zip(tips, pips):
+                        if lmList[tip][1] > lmList[pip][1]:
+                            closed += 1
+                    
+                    self.hand_closed = closed >= 3
+                else:
+                    self.hand_detected = False
+            except Exception as e:
+                print(f"Error en detección de manos: {e}")
         
         self.after(0, self.update_hand_status_ui)
         
@@ -971,11 +990,14 @@ class MangaAutoscrollerApp(ctk.CTk):
             print(f"Error al renderizar frame en UI: {e}")
 
     def clear_video_label(self):
-        self.video_label.configure(
-            image=None, 
-            text="CÁMARA APAGADA\n\nActiva el interruptor arriba\npara iniciar."
-        )
         self.last_frame = None
+        try:
+            self.video_label.configure(
+                image=None,
+                text="CÁMARA APAGADA\n\nActiva el interruptor arriba\npara iniciar."
+            )
+        except Exception:
+            pass
 
     def update_face_detected_ui(self, detected):
         if detected:
