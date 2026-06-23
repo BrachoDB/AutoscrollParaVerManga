@@ -40,14 +40,6 @@ except ImportError:
     MEDIPIPE_AVAILABLE = False
     mp = None
 
-# Intentar importar cvzone como alternativa más simple
-try:
-    from cvzone.HandTrackingModule import HandDetector
-    CVZONE_AVAILABLE = True
-except ImportError:
-    CVZONE_AVAILABLE = False
-    HandDetector = None
-
 import customtkinter as ctk
 
 # Configuración del tema visual de CustomTkinter
@@ -785,11 +777,9 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-        # Inicializar detector de manos (cvzone o MediaPipe)
+        # Inicializar detector de manos con MediaPipe
         hand_detector = None
-        if self.camera_mode == "hand" and CVZONE_AVAILABLE:
-            hand_detector = HandDetector(maxHands=1, detectionCon=0.7)
-        elif self.camera_mode == "hand" and MEDIPIPE_AVAILABLE and mp:
+        if self.camera_mode == "hand" and MEDIPIPE_AVAILABLE and mp:
             try:
                 mp_hands = mp.solutions.hands
                 hand_detector = mp_hands.Hands(
@@ -857,41 +847,25 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.hand_detected = False
         self.hand_closed = False
         
-        # cvzone detecta manos automáticamente y dibuja
-        if CVZONE_AVAILABLE:
-            # cvzone detecta mano y devuelve lista de manos y frame modificado
-            hands, img = hand_detector.findHands(frame.copy(), draw=False)
+        if MEDIPIPE_AVAILABLE and hand_detector and mp:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = hand_detector.process(frame_rgb)
             
-            if hands:
+            if results.multi_hand_landmarks:
                 self.hand_detected = True
+                h, w, _ = frame.shape
+                hand_landmarks = results.multi_hand_landmarks[0]
                 
-                # Dibujar todos los puntos clave (21 puntos por mano)
-                hand = hands[0]  # Solo la primera mano
-                lmList = hand["lmList"]  # Lista de 21 landmarks
-                bbox = hand["bbox"]  # Bounding box
+                lmList = []
+                for lm in hand_landmarks.landmark:
+                    lmList.append([int(lm.x * w), int(lm.y * h), lm.z])
                 
-                # Dibujar puntos clave
-                for point in lmList:
-                    x, y = point[0], point[1]
-                    cv2.circle(frame, (x, y), 5, (46, 204, 113), -1)
+                mp.solutions.drawing_utils.draw_landmarks(
+                    frame, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS
+                )
                 
-                # Dibujar conexiones entre puntos (puntos clave de la mano)
-                connections = [
-                    (0, 1), (1, 2), (2, 3), (3, 4),       # Pulgar
-                    (0, 5), (5, 6), (6, 7), (7, 8),       # Índice
-                    (5, 9), (9, 10), (10, 11), (11, 12),  # Medio
-                    (9, 13), (13, 14), (14, 15), (15, 16), # Anular
-                    (13, 17), (17, 18), (18, 19), (19, 20), # Meñique
-                    (0, 5), (5, 9), (9, 13), (13, 17), (0, 17)  # Palma
-                ]
-                for start, end in connections:
-                    x1, y1 = lmList[start][0], lmList[start][1]
-                    x2, y2 = lmList[end][0], lmList[end][1]
-                    cv2.line(frame, (x1, y1), (x2, y2), (46, 204, 113), 2)
-                
-                # Detectar si es puño (punta de dedos más baja que articulaciones inferiores)
-                tips = [8, 12, 16, 20]   # Puntas de dedos (índice, medio, anular, meñique)
-                pips = [6, 10, 14, 18]   # Articulaciones PIP
+                tips = [8, 12, 16, 20]
+                pips = [6, 10, 14, 18]
                 
                 closed = 0
                 for tip, pip in zip(tips, pips):
@@ -901,11 +875,9 @@ class MangaAutoscrollerApp(ctk.CTk):
                 self.hand_closed = closed >= 3
             else:
                 self.hand_detected = False
-                
-        # Actualizar UI
+        
         self.after(0, self.update_hand_status_ui)
         
-        # Lógica: mano abierta activa, puño detiene
         if self.hand_detected and not self.hand_closed:
             if not self.is_scrolling:
                 self.scroll_direction = "Bajar"
