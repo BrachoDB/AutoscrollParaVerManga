@@ -75,18 +75,13 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.camera_enabled = False
         self.camera_active = False
         self.cap = None
-        self.camera_mode = "face"  # "face" o "hand"
-        self.calibrated_y = None
-        self.current_face_y = None
-        self.diff_y_val = 0
-        self.face_detected = False
+        self.camera_mode = "hand"  # "hand" o "hand_gesture"
         self.camera_thread = None
-        self.sensitivity = 20  # Pixeles de tolerancia
-        self.action_tilt_up = "Detener"  # Qué hacer al levantar la cabeza: "Detener" o "Subir"
         self.last_frame = None
         self.hand_detected = False
         self.hand_closed = False
         self.hand_stop_active = False
+        self.gesture_sensitivity = 15
 
         # Configuración de interfaz
         self.setup_ui()
@@ -391,10 +386,10 @@ class MangaAutoscrollerApp(ctk.CTk):
 
             self.mode_selector = ctk.CTkSegmentedButton(
                 self.mode_selector_frame,
-                values=["Cara", "Mano"],
+                values=["Mano Clásica", "Mano Gestos"],
                 command=self.on_mode_changed
             )
-            self.mode_selector.set("Cara")
+            self.mode_selector.set("Mano Clásica")
             self.mode_selector.pack(side="left")
 
             # Switch principal de cámara
@@ -428,94 +423,11 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.cam_settings_frame = ctk.CTkFrame(self.cam_controls_frame, fg_color="transparent")
             self.cam_settings_frame.pack(side="left", fill="both", expand=True, padx=(15, 0))
 
-            # Controles para modo cara (ocultos por defecto si modo mano)
-            self.face_controls_frame = ctk.CTkFrame(self.cam_settings_frame, fg_color="transparent")
-
-            self.calibrate_btn = ctk.CTkButton(
-                self.face_controls_frame,
-                text="📍 Calibrar Centro",
-                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
-                fg_color="#2ECC71",
-                hover_color="#27AE60",
-                text_color="#000000",
-                state="disabled",
-                command=self.calibrate_neutral_position
-            )
-            self.calibrate_btn.pack(fill="x", pady=(0, 8))
-
-            self.calib_status_label = ctk.CTkLabel(
-                self.face_controls_frame,
-                text="Estado: Sin Calibrar",
-                font=ctk.CTkFont(family="Inter", size=11),
-                text_color="#888888",
-                anchor="w"
-            )
-            self.calib_status_label.pack(fill="x", pady=1)
-
-            self.face_status_label = ctk.CTkLabel(
-                self.face_controls_frame,
-                text="Rostro: No detectado",
-                font=ctk.CTkFont(family="Inter", size=11),
-                text_color="#CC3333",
-                anchor="w"
-            )
-            self.face_status_label.pack(fill="x", pady=1)
-
-            # Sensibilidad
-            self.sens_title = ctk.CTkLabel(
-                self.face_controls_frame,
-                text="Sensibilidad del gesto:",
-                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
-                anchor="w"
-            )
-            self.sens_title.pack(fill="x", pady=(8, 0))
-
-            self.sens_slider = ctk.CTkSlider(
-                self.face_controls_frame,
-                from_=5,
-                to=40,
-                number_of_steps=35,
-                command=self.on_sensitivity_changed
-            )
-            self.sens_slider.set(self.sensitivity)
-            self.sens_slider.pack(fill="x", pady=(2, 8))
-
-            # Indicador Visual de Inclinación de Cabeza
-            self.tilt_indicator_title = ctk.CTkLabel(
-                self.face_controls_frame,
-                text="Inclinación actual:",
-                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
-                anchor="w"
-            )
-            self.tilt_indicator_title.pack(fill="x")
-
-            self.tilt_progressbar = ctk.CTkProgressBar(
-                self.face_controls_frame,
-                progress_color="#2ECC71",
-                fg_color="#33333F",
-                height=15
-            )
-            self.tilt_progressbar.set(0.5)  # 0.5 representa centro
-            self.tilt_progressbar.pack(fill="x", pady=(2, 5))
-
-            # Explicación breve
-            self.tilt_explain_lbl = ctk.CTkLabel(
-                self.face_controls_frame,
-                text="Inclina la cabeza ligeramente\nhacia abajo para bajar.",
-                font=ctk.CTkFont(family="Inter", size=10, slant="italic"),
-                text_color="#888888",
-                justify="left",
-                anchor="w"
-            )
-            self.tilt_explain_lbl.pack(fill="x", pady=(2, 0))
-
-            self.face_controls_frame.pack(fill="both", expand=True)
-
-            # Controles para modo mano (ocultos por defecto)
-            self.hand_controls_frame = ctk.CTkFrame(self.cam_settings_frame, fg_color="transparent")
+            # Controles para modo mano clásica (ocultos por defecto en modo gestos)
+            self.hand_classic_controls_frame = ctk.CTkFrame(self.cam_settings_frame, fg_color="transparent")
 
             self.hand_status_badge = ctk.CTkLabel(
-                self.hand_controls_frame,
+                self.hand_classic_controls_frame,
                 text="NO DETECTADA",
                 fg_color="#33333F",
                 text_color="#888888",
@@ -526,7 +438,7 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.hand_status_badge.pack(fill="x", pady=5)
 
             self.hand_instructions = ctk.CTkLabel(
-                self.hand_controls_frame,
+                self.hand_classic_controls_frame,
                 text="👉 Muestra la mano abierta para ACTIVAR el scroll.\n"
                      "👉 Haz un PUÑO para DETENER el scroll.\n"
                      "(No vuelve a activar automáticamente)",
@@ -539,12 +451,92 @@ class MangaAutoscrollerApp(ctk.CTk):
             # Frame para mostrar si mediapipe está disponible
             if not MEDIPIPE_AVAILABLE:
                 self.mediapipe_warning = ctk.CTkLabel(
-                    self.hand_controls_frame,
+                    self.hand_classic_controls_frame,
                     text="⚠️ MediaPipe no detectado.\nInstala con: pip install mediapipe",
                     font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
                     text_color="#CC3333"
                 )
                 self.mediapipe_warning.pack(fill="x", pady=5)
+
+            # Controles para modo mano gestos (oculto por defecto)
+            self.hand_gesture_controls_frame = ctk.CTkFrame(self.cam_settings_frame, fg_color="transparent")
+
+            self.hg_status_badge = ctk.CTkLabel(
+                self.hand_gesture_controls_frame,
+                text="SIN CONTROL",
+                fg_color="#33333F",
+                text_color="#888888",
+                font=ctk.CTkFont(family="Inter", size=14, weight="bold"),
+                height=40,
+                corner_radius=8
+            )
+            self.hg_status_badge.pack(fill="x", pady=5)
+
+            self.hg_instructions = ctk.CTkLabel(
+                self.hand_gesture_controls_frame,
+                text="☝️ Extiende el ÍNDICE para ACTIVAR control.\n"
+                     "👆 Mano ARRIBA en cámara → Desplazar hacia ABAJO\n"
+                     "👇 Mano ABAJO en cámara → Desplazar hacia ARRIBA\n"
+                     "✊ Mano quieta cerca del centro o puño → DETENER",
+                font=ctk.CTkFont(family="Inter", size=11),
+                text_color="#AAAAAA",
+                justify="left"
+            )
+            self.hg_instructions.pack(anchor="w", pady=5)
+
+            self.hg_sens_title = ctk.CTkLabel(
+                self.hand_gesture_controls_frame,
+                text="Sensibilidad del gesto:",
+                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
+                anchor="w"
+            )
+            self.hg_sens_title.pack(fill="x", pady=(8, 0))
+
+            self.hg_sens_slider = ctk.CTkSlider(
+                self.hand_gesture_controls_frame,
+                from_=5,
+                to=40,
+                number_of_steps=35,
+                command=self.on_gesture_sensitivity_changed
+            )
+            self.hg_sens_slider.set(self.gesture_sensitivity)
+            self.hg_sens_slider.pack(fill="x", pady=(2, 8))
+
+            self.hg_pos_title = ctk.CTkLabel(
+                self.hand_gesture_controls_frame,
+                text="Posición de la mano:",
+                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
+                anchor="w"
+            )
+            self.hg_pos_title.pack(fill="x")
+
+            self.hg_pos_progressbar = ctk.CTkProgressBar(
+                self.hand_gesture_controls_frame,
+                progress_color="#2ECC71",
+                fg_color="#33333F",
+                height=15
+            )
+            self.hg_pos_progressbar.set(0.5)
+            self.hg_pos_progressbar.pack(fill="x", pady=(2, 5))
+
+            self.hg_pos_label = ctk.CTkLabel(
+                self.hand_gesture_controls_frame,
+                text="● Centro",
+                font=ctk.CTkFont(family="Inter", size=11),
+                text_color="#888888",
+                anchor="w"
+            )
+            self.hg_pos_label.pack(fill="x", pady=(0, 5))
+
+            # Frame para mostrar si mediapipe está disponible en modo gestos
+            if not MEDIPIPE_AVAILABLE:
+                self.hg_mediapipe_warning = ctk.CTkLabel(
+                    self.hand_gesture_controls_frame,
+                    text="⚠️ MediaPipe no detectado.\nInstala con: pip install mediapipe",
+                    font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
+                    text_color="#CC3333"
+                )
+                self.hg_mediapipe_warning.pack(fill="x", pady=5)
 
     # ----------------------------------------------------
     # EVENT HANDLING / CONTROL LOGIC
@@ -592,8 +584,8 @@ class MangaAutoscrollerApp(ctk.CTk):
     def on_dir_changed(self, value):
         self.scroll_direction = value
 
-    def on_sensitivity_changed(self, value):
-        self.sensitivity = int(value)
+    def on_gesture_sensitivity_changed(self, value):
+        self.gesture_sensitivity = int(value)
 
     def on_hotkey_changed(self, value):
         self.selected_hotkey = value
@@ -601,8 +593,7 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.start_keyboard_listener()
 
     def on_mode_changed(self, value):
-        old_mode = self.camera_mode
-        self.camera_mode = "face" if value == "Cara" else "hand"
+        self.camera_mode = "hand" if value == "Mano Clásica" else "hand_gesture"
         self.update_mode_ui()
         
         # REINICIAR el hilo de cámara cuando cambie el modo
@@ -614,13 +605,12 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.camera_thread.start()
 
     def update_mode_ui(self):
-        if self.camera_mode == "face":
-            self.face_controls_frame.pack(fill="both", expand=True)
-            if hasattr(self, 'hand_controls_frame'):
-                self.hand_controls_frame.pack_forget()
+        if self.camera_mode == "hand_gesture":
+            self.hand_classic_controls_frame.pack_forget()
+            self.hand_gesture_controls_frame.pack(fill="both", expand=True)
         else:
-            self.face_controls_frame.pack_forget()
-            self.hand_controls_frame.pack(fill="both", expand=True)
+            self.hand_gesture_controls_frame.pack_forget()
+            self.hand_classic_controls_frame.pack(fill="both", expand=True)
 
     # ----------------------------------------------------
     # TECLADO / SHORTCUT GLOBAL (pynput)
@@ -727,21 +717,15 @@ class MangaAutoscrollerApp(ctk.CTk):
             # Iniciar hilo de cámara
             self.camera_active = True
             self.hand_stop_active = False
-            if self.camera_mode == "face":
-                self.calibrate_btn.configure(state="normal")
             self.camera_thread = threading.Thread(target=self.camera_worker, daemon=True)
             self.camera_thread.start()
         else:
             # Detener cámara
             self.camera_active = False
-            self.calibrate_btn.configure(state="disabled")
-            self.calib_status_label.configure(text="Estado: Sin Calibrar", text_color="#888888")
-            self.face_status_label.configure(text="Rostro: Desactivado", text_color="#888888")
-            self.tilt_progressbar.set(0.5)
             self.hand_status_badge.configure(text="NO DETECTADA", fg_color="#33333F", text_color="#888888")
-            self.calibrated_y = None
-            self.current_face_y = None
-            self.diff_y_val = 0
+            self.hg_status_badge.configure(text="SIN CONTROL", fg_color="#33333F", text_color="#888888")
+            self.hg_pos_progressbar.set(0.5)
+            self.hg_pos_label.configure(text="● Centro")
             self.hand_detected = False
             self.hand_closed = False
             self.hand_stop_active = False
@@ -753,17 +737,6 @@ class MangaAutoscrollerApp(ctk.CTk):
                 
             # Limpiar preview de video
             self.after(200, self.clear_video_label)
-
-    def calibrate_neutral_position(self):
-        if not self.face_detected or self.current_face_y is None:
-            self.calib_status_label.configure(text="¡Rostro no detectado!", text_color="#CC3333")
-            return
-        
-        self.calibrated_y = self.current_face_y
-        self.calib_status_label.configure(
-            text=f"Calibrado (Y={self.calibrated_y}px)", 
-            text_color="#2ECC71"
-        )
 
     def camera_worker(self):
         # Intentar conectar con la webcam index 0 (usando DirectShow en Windows para carga más veloz)
@@ -784,7 +757,7 @@ class MangaAutoscrollerApp(ctk.CTk):
 
         # Inicializar detector de manos con MediaPipe Tasks API
         hand_detector = None
-        if self.camera_mode == "hand" and MEDIPIPE_AVAILABLE and HandLandmarker:
+        if MEDIPIPE_AVAILABLE and HandLandmarker:
             try:
                 model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "hand_landmarker.task")
                 if os.path.exists(model_path):
@@ -795,21 +768,6 @@ class MangaAutoscrollerApp(ctk.CTk):
                 print(f"Error al inicializar HandLandmarker: {e}")
                 hand_detector = None
 
-        # Cargar el detector de rostros para modo cara
-        face_cascade = None
-        if self.camera_mode == "face":
-            try:
-                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-                # Verificar que la cascada se cargó correctamente
-                if face_cascade.empty():
-                    raise Exception("No se pudo cargar el clasificador Haar")
-            except Exception as e:
-                print(f"Error al cargar cascada de rostros: {e}")
-                self.after(0, lambda: self.show_warning("Error al cargar detector facial."))
-                self.after(0, self.reset_camera_switch)
-                self.camera_active = False
-                return
-
         while self.camera_active:
             ret, frame = self.cap.read()
             if not ret:
@@ -818,17 +776,11 @@ class MangaAutoscrollerApp(ctk.CTk):
 
             # Voltear la cámara para efecto espejo
             frame = cv2.flip(frame, 1)
-            h_frame, w_frame, _ = frame.shape
             
             if self.camera_mode == "hand" and hand_detector:
                 self._process_hand_mode(frame, hand_detector)
-            elif face_cascade is not None:
-                self._process_face_mode(frame, face_cascade)
-            else:
-                # Si estamos en modo cara pero no hay face_cascade, detener
-                if self.camera_mode == "face":
-                    self.camera_active = False
-                    break
+            elif self.camera_mode == "hand_gesture" and hand_detector:
+                self._process_hand_gesture_mode(frame, hand_detector)
 
             # Redimensionar el frame para la vista previa de la UI (240x180)
             frame_resized = cv2.resize(frame, (240, 180))
@@ -906,70 +858,100 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.is_scrolling = False
             self.after(0, self.update_status_ui)
 
-    def _process_face_mode(self, frame, face_cascade):
-        if face_cascade is None:
-            return
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        faces = face_cascade.detectMultiScale(
-            gray, 
-            scaleFactor=1.1, 
-            minNeighbors=5, 
-            minSize=(80, 80)
-        )
+    def _process_hand_gesture_mode(self, frame, hand_detector):
+        h, w, _ = frame.shape
+        center_y = h // 2
+        control_active = False
+        hand_y = None
 
-        face_detected_this_frame = len(faces) > 0
+        if MEDIPIPE_AVAILABLE and hand_detector:
+            try:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                result = hand_detector.detect(mp_image)
 
-        if face_detected_this_frame:
-            faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
-            x, y, w, h = faces[0]
-            
-            face_center_y = y + h // 2
-            self.current_face_y = face_center_y
-            self.face_detected = True
+                if result.hand_landmarks:
+                    hand_landmarks = result.hand_landmarks[0]
+                    lmList = [[int(lm.x * w), int(lm.y * h), lm.z] for lm in hand_landmarks]
 
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (46, 204, 113), 2)
-            cv2.circle(frame, (x + w//2, face_center_y), 4, (231, 76, 60), -1)
+                    connections = [
+                        (0, 1), (1, 2), (2, 3), (3, 4),
+                        (0, 5), (5, 6), (6, 7), (7, 8),
+                        (5, 9), (9, 10), (10, 11), (11, 12),
+                        (9, 13), (13, 14), (14, 15), (15, 16),
+                        (13, 17), (17, 18), (18, 19), (19, 20),
+                        (0, 17)
+                    ]
+                    for start, end in connections:
+                        cv2.line(frame, (lmList[start][0], lmList[start][1]),
+                                 (lmList[end][0], lmList[end][1]), (46, 204, 113), 2)
+                    for point in lmList:
+                        cv2.circle(frame, (point[0], point[1]), 5, (46, 204, 113), -1)
 
-            if self.calibrated_y is not None:
-                diff_y = face_center_y - self.calibrated_y
-                self.diff_y_val = diff_y
+                    index_extended = lmList[8][1] < lmList[6][1]
+                    middle_extended = lmList[12][1] < lmList[10][1]
+                    ring_extended = lmList[16][1] < lmList[14][1]
+                    pinky_extended = lmList[20][1] < lmList[18][1]
 
-                normalized_diff = max(min(diff_y, 60), -60)
-                progress_val = 0.5 + (normalized_diff / 120.0)
-                self.after(0, lambda p=progress_val: self.tilt_progressbar.set(p))
+                    extended_count = sum([index_extended, middle_extended, ring_extended, pinky_extended])
+                    is_fist = extended_count <= 1
 
-                if diff_y > self.sensitivity:
-                    if not self.is_scrolling or self.scroll_direction != "Bajar":
-                        self.scroll_direction = "Bajar"
-                        self.is_scrolling = True
-                        self.after(0, self.update_status_ui)
-                elif diff_y < -self.sensitivity:
-                    if self.action_tilt_up == "Subir":
-                        if not self.is_scrolling or self.scroll_direction != "Subir":
-                            self.scroll_direction = "Subir"
-                            self.is_scrolling = True
-                            self.after(0, self.update_status_ui)
-                    else:
-                        if self.is_scrolling:
-                            self.is_scrolling = False
-                            self.after(0, self.update_status_ui)
-                else:
-                    if self.is_scrolling:
-                        self.is_scrolling = False
-                        self.after(0, self.update_status_ui)
+                    control_active = index_extended and not is_fist
+                    hand_y = lmList[5][1]
+
+                    cv2.circle(frame, (lmList[8][0], lmList[8][1]), 8, (0, 255, 255), -1)
+                    cv2.line(frame, (0, center_y), (w, center_y), (100, 100, 100), 1)
+            except Exception as e:
+                print(f"Error en detección de gestos: {e}")
+
+        self.after(0, self.update_hand_gesture_status_ui, control_active, hand_y)
+
+        if control_active and hand_y is not None:
+            diff = hand_y - center_y
+
+            norm_diff = max(min(diff, 60), -60)
+            progress_val = 0.5 + (norm_diff / 120.0)
+            self.after(0, lambda p=progress_val: self.hg_pos_progressbar.set(p))
+
+            if hand_y < center_y - self.gesture_sensitivity:
+                if not self.is_scrolling or self.scroll_direction != "Bajar":
+                    self.scroll_direction = "Bajar"
+                    self.is_scrolling = True
+                    self.after(0, self.update_status_ui)
+                self.after(0, lambda d=diff: self.hg_pos_label.configure(
+                    text=f"▼ Bajando (mano arriba, dif: {d})"))
+            elif hand_y > center_y + self.gesture_sensitivity:
+                if not self.is_scrolling or self.scroll_direction != "Subir":
+                    self.scroll_direction = "Subir"
+                    self.is_scrolling = True
+                    self.after(0, self.update_status_ui)
+                self.after(0, lambda d=diff: self.hg_pos_label.configure(
+                    text=f"▲ Subiendo (mano abajo, dif: {d})"))
             else:
-                self.after(0, lambda: self.tilt_progressbar.set(0.5))
-            
-            self.after(0, self.update_face_detected_ui, True)
+                if self.is_scrolling:
+                    self.is_scrolling = False
+                    self.after(0, self.update_status_ui)
+                self.after(0, lambda: self.hg_pos_progressbar.set(0.5))
+                self.after(0, lambda: self.hg_pos_label.configure(text="● Centro"))
         else:
-            self.face_detected = False
-            self.current_face_y = None
-            self.after(0, self.update_face_detected_ui, False)
-            
             if self.is_scrolling:
                 self.is_scrolling = False
                 self.after(0, self.update_status_ui)
+            self.after(0, lambda: self.hg_pos_progressbar.set(0.5))
+            if hand_y is None:
+                self.after(0, lambda: self.hg_pos_label.configure(text="○ Sin mano detectada"))
+            else:
+                self.after(0, lambda: self.hg_pos_label.configure(text="○ Gesto no válido"))
+
+    def update_hand_gesture_status_ui(self, control_active, hand_y):
+        if not self.camera_active:
+            self.hg_status_badge.configure(text="CÁMARA APAGADA", fg_color="#33333F", text_color="#888888")
+        elif hand_y is None:
+            self.hg_status_badge.configure(text="MANO NO DETECTADA", fg_color="#CC3333", text_color="#FFFFFF")
+        elif control_active:
+            self.hg_status_badge.configure(text="CONTROL ACTIVO", fg_color="#2ECC71", text_color="#000000")
+        else:
+            self.hg_status_badge.configure(text="GESTO NO VÁLIDO", fg_color="#FFA500", text_color="#000000")
 
     def update_hand_status_ui(self):
         if not self.hand_detected:
@@ -998,12 +980,6 @@ class MangaAutoscrollerApp(ctk.CTk):
             )
         except Exception:
             pass
-
-    def update_face_detected_ui(self, detected):
-        if detected:
-            self.face_status_label.configure(text="Rostro: DETECTADO ✅", text_color="#2ECC71")
-        else:
-            self.face_status_label.configure(text="Rostro: No detectado ⚠️", text_color="#CC3333")
 
     def reset_camera_switch(self):
         if hasattr(self, 'webcam_switch'):
