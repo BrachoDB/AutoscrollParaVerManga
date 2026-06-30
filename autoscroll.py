@@ -441,16 +441,55 @@ class MangaAutoscrollerApp(ctk.CTk):
             )
             self.hand_status_badge.pack(fill="x", pady=5)
 
+            self.hand_calibrate_btn = ctk.CTkButton(
+                self.hand_classic_controls_frame,
+                text="📍 Calibrar Centro",
+                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
+                fg_color="#2ECC71",
+                hover_color="#27AE60",
+                text_color="#000000",
+                state="disabled",
+                command=self.calibrate_hand_gesture
+            )
+            self.hand_calibrate_btn.pack(fill="x", pady=(0, 5))
+
             self.hand_instructions = ctk.CTkLabel(
                 self.hand_classic_controls_frame,
-                text="👉 Muestra la mano abierta para ACTIVAR el scroll.\n"
-                     "👉 Haz un PUÑO para DETENER el scroll.\n"
-                     "(No vuelve a activar automáticamente)",
+                text="🖐️ Mano abierta → Control por posición\n"
+                     "👆 Mano ARRIBA → Desplazar ABAJO\n"
+                     "👇 Mano ABAJO → Desplazar ARRIBA\n"
+                     "✊ Puño o centro → DETENER",
                 font=ctk.CTkFont(family="Inter", size=11),
                 text_color="#AAAAAA",
                 justify="left"
             )
             self.hand_instructions.pack(anchor="w", pady=10)
+
+            self.hand_pos_title = ctk.CTkLabel(
+                self.hand_classic_controls_frame,
+                text="Posición de la mano:",
+                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
+                anchor="w"
+            )
+            self.hand_pos_title.pack(fill="x")
+
+            self.hand_pos_progressbar = ctk.CTkProgressBar(
+                self.hand_classic_controls_frame,
+                progress_color="#2ECC71",
+                fg_color="#33333F",
+                height=15
+            )
+            self.hand_pos_progressbar.set(0.5)
+            self.hand_pos_progressbar.pack(fill="x", pady=(2, 5))
+
+            self.hand_pos_label = ctk.CTkLabel(
+                self.hand_classic_controls_frame,
+                text="● Centro",
+                font=ctk.CTkFont(family="Inter", size=11),
+                text_color="#888888",
+                anchor="w"
+            )
+            self.hand_pos_label.pack(fill="x", pady=(0, 5))
 
             # Frame para mostrar si mediapipe está disponible
             if not MEDIPIPE_AVAILABLE:
@@ -610,9 +649,9 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.hg_calibrate_btn.configure(text="Espera...", state="disabled")
 
     def _on_hand_calibration_done(self):
-        self.hg_calibrate_btn.configure(
-            text=f"✅ Centro: {int(self.calibrated_hand_y)}px", state="disabled", fg_color="#888888"
-        )
+        msg = f"✅ Centro: {int(self.calibrated_hand_y)}px"
+        self.hg_calibrate_btn.configure(text=msg, state="disabled", fg_color="#888888")
+        self.hand_calibrate_btn.configure(text=msg, state="disabled", fg_color="#888888")
 
     def on_hotkey_changed(self, value):
         self.selected_hotkey = value
@@ -746,18 +785,22 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.hand_stop_active = False
             self.calibrated_hand_y = None
             self.calibrate_pending = False
-            if self.camera_mode == "hand_gesture":
-                self.hg_calibrate_btn.configure(state="normal", text="📍 Calibrar Centro", fg_color="#2ECC71")
+            self.hand_calibrate_btn.configure(state="normal", text="📍 Calibrar Centro", fg_color="#2ECC71")
+            self.hg_calibrate_btn.configure(state="normal", text="📍 Calibrar Centro", fg_color="#2ECC71")
+            self._frame_counter = 0
             self.camera_thread = threading.Thread(target=self.camera_worker, daemon=True)
             self.camera_thread.start()
         else:
             # Detener cámara
             self.camera_active = False
             self.hand_status_badge.configure(text="NO DETECTADA", fg_color="#33333F", text_color="#888888")
+            self.hand_pos_progressbar.set(0.5)
+            self.hand_pos_label.configure(text="● Centro")
             self.hg_status_badge.configure(text="SIN CONTROL", fg_color="#33333F", text_color="#888888")
             self.hg_pos_progressbar.set(0.5)
             self.hg_pos_label.configure(text="● Centro")
             self.hg_calibrate_btn.configure(state="disabled", text="📍 Calibrar Centro", fg_color="#2ECC71")
+            self.hand_calibrate_btn.configure(state="disabled", text="📍 Calibrar Centro", fg_color="#2ECC71")
             self.hand_detected = False
             self.hand_closed = False
             self.hand_stop_active = False
@@ -808,13 +851,14 @@ class MangaAutoscrollerApp(ctk.CTk):
                 time.sleep(0.03)
                 continue
 
-            # Voltear la cámara para efecto espejo
             frame = cv2.flip(frame, 1)
-            
-            if self.camera_mode == "hand" and hand_detector:
-                self._process_hand_mode(frame, hand_detector)
-            elif self.camera_mode == "hand_gesture" and hand_detector:
-                self._process_hand_gesture_mode(frame, hand_detector)
+
+            if (self._frame_counter % 2 == 0) and hand_detector:
+                if self.camera_mode == "hand":
+                    self._process_hand_mode(frame, hand_detector)
+                elif self.camera_mode == "hand_gesture":
+                    self._process_hand_gesture_mode(frame, hand_detector)
+            self._frame_counter += 1
 
             # Redimensionar el frame para la vista previa de la UI (240x180)
             frame_resized = cv2.resize(frame, (240, 180))
@@ -836,6 +880,7 @@ class MangaAutoscrollerApp(ctk.CTk):
     def _process_hand_mode(self, frame, hand_detector):
         self.hand_detected = False
         self.hand_closed = False
+        hand_y = None
         
         if MEDIPIPE_AVAILABLE and hand_detector:
             try:
@@ -848,9 +893,7 @@ class MangaAutoscrollerApp(ctk.CTk):
                     h, w, _ = frame.shape
                     hand_landmarks = result.hand_landmarks[0]
                     
-                    lmList = []
-                    for lm in hand_landmarks:
-                        lmList.append([int(lm.x * w), int(lm.y * h), lm.z])
+                    lmList = [[int(lm.x * w), int(lm.y * h), lm.z] for lm in hand_landmarks]
                     
                     connections = [
                         (0, 1), (1, 2), (2, 3), (3, 4),
@@ -876,6 +919,12 @@ class MangaAutoscrollerApp(ctk.CTk):
                             closed += 1
                     
                     self.hand_closed = closed >= 3
+                    
+                    palm_indices = [5, 9, 13, 17]
+                    hand_y = sum(lmList[i][1] for i in palm_indices) / len(palm_indices)
+                    
+                    center_line = self.calibrated_hand_y if self.calibrated_hand_y is not None else h // 2
+                    cv2.line(frame, (0, int(center_line)), (w, int(center_line)), (100, 100, 100), 1)
                 else:
                     self.hand_detected = False
             except Exception as e:
@@ -883,11 +932,42 @@ class MangaAutoscrollerApp(ctk.CTk):
         
         self.after(0, self.update_hand_status_ui)
         
-        if self.hand_detected and not self.hand_closed:
-            if not self.is_scrolling:
-                self.scroll_direction = "Bajar"
-                self.is_scrolling = True
-                self.after(0, self.update_status_ui)
+        if self.hand_detected and not self.hand_closed and hand_y is not None:
+            h, w, _ = frame.shape
+            center_y = self.calibrated_hand_y if self.calibrated_hand_y is not None else h // 2
+            diff = hand_y - center_y
+            abs_diff = abs(diff)
+
+            norm_diff = max(min(diff, 80), -80)
+            progress_val = 0.5 + (norm_diff / 160.0)
+            self.after(0, lambda p=progress_val: self.hand_pos_progressbar.set(p))
+
+            if abs_diff > self.gesture_sensitivity + 5:
+                normalized = min((abs_diff - self.gesture_sensitivity - 5) / 60.0, 1.0)
+                speed_factor = normalized * normalized * 2.0 + 0.3
+                self.scroll_amount = int(6 + speed_factor * 12)
+                self.scroll_interval = max(0.02, 0.10 - speed_factor * 0.022)
+
+                pps = self.scroll_amount / self.scroll_interval
+
+                if hand_y < center_y - self.gesture_sensitivity - 5:
+                    self.scroll_direction = "Bajar"
+                    self.after(0, lambda p=pps: self.hand_pos_label.configure(
+                        text=f"▼ Bajando {p:.0f} px/s"))
+                else:
+                    self.scroll_direction = "Subir"
+                    self.after(0, lambda p=pps: self.hand_pos_label.configure(
+                        text=f"▲ Subiendo {p:.0f} px/s"))
+
+                if not self.is_scrolling:
+                    self.is_scrolling = True
+                    self.after(0, self.update_status_ui)
+            else:
+                if self.is_scrolling:
+                    self.is_scrolling = False
+                    self.after(0, self.update_status_ui)
+                self.after(0, lambda: self.hand_pos_progressbar.set(0.5))
+                self.after(0, lambda: self.hand_pos_label.configure(text="● Centro"))
         elif self.hand_closed and self.is_scrolling:
             self.is_scrolling = False
             self.after(0, self.update_status_ui)
@@ -981,24 +1061,27 @@ class MangaAutoscrollerApp(ctk.CTk):
 
             abs_diff = abs(diff)
             if abs_diff > self.gesture_sensitivity:
-                speed_factor = min(abs_diff / 40.0, 3.0)
-                self.scroll_amount = int(5 + speed_factor * 10)
-                self.scroll_interval = max(0.02, 0.08 - speed_factor * 0.018)
+                normalized = min((abs_diff - self.gesture_sensitivity) / 60.0, 1.0)
+                speed_factor = normalized * normalized * 2.5 + 0.3
+                self.scroll_amount = int(6 + speed_factor * 14)
+                self.scroll_interval = max(0.02, 0.10 - speed_factor * 0.024)
+
+                pps = self.scroll_amount / self.scroll_interval
 
                 if hand_y < center_y - self.gesture_sensitivity:
                     self.scroll_direction = "Bajar"
                     if not self.is_scrolling:
                         self.is_scrolling = True
                         self.after(0, self.update_status_ui)
-                    self.after(0, lambda d=diff: self.hg_pos_label.configure(
-                        text=f"▼ Bajando  {speed_factor:.1f}x"))
+                    self.after(0, lambda p=pps: self.hg_pos_label.configure(
+                        text=f"▼ {p:.0f} px/s"))
                 else:
                     self.scroll_direction = "Subir"
                     if not self.is_scrolling:
                         self.is_scrolling = True
                         self.after(0, self.update_status_ui)
-                    self.after(0, lambda d=diff: self.hg_pos_label.configure(
-                        text=f"▲ Subiendo  {speed_factor:.1f}x"))
+                    self.after(0, lambda p=pps: self.hg_pos_label.configure(
+                        text=f"▲ {p:.0f} px/s"))
             else:
                 if self.is_scrolling:
                     self.is_scrolling = False
