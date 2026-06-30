@@ -82,6 +82,10 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.hand_closed = False
         self.hand_stop_active = False
         self.gesture_sensitivity = 15
+        self.pinch_detected = False
+        self.prev_pinch_detected = False
+        self.calibrated_hand_y = None
+        self.calibrate_pending = False
 
         # Configuración de interfaz
         self.setup_ui()
@@ -472,12 +476,25 @@ class MangaAutoscrollerApp(ctk.CTk):
             )
             self.hg_status_badge.pack(fill="x", pady=5)
 
+            self.hg_calibrate_btn = ctk.CTkButton(
+                self.hand_gesture_controls_frame,
+                text="📍 Calibrar Centro",
+                font=ctk.CTkFont(family="Inter", size=11, weight="bold"),
+                fg_color="#2ECC71",
+                hover_color="#27AE60",
+                text_color="#000000",
+                state="disabled",
+                command=self.calibrate_hand_gesture
+            )
+            self.hg_calibrate_btn.pack(fill="x", pady=(0, 5))
+
             self.hg_instructions = ctk.CTkLabel(
                 self.hand_gesture_controls_frame,
-                text="☝️ Extiende el ÍNDICE para ACTIVAR control.\n"
-                     "👆 Mano ARRIBA en cámara → Desplazar hacia ABAJO\n"
-                     "👇 Mano ABAJO en cámara → Desplazar hacia ARRIBA\n"
-                     "✊ Mano quieta cerca del centro o puño → DETENER",
+                text="☝️ Extiende el ÍNDICE para ACTIVAR control táctil.\n"
+                     "👆 Mano ARRIBA → Desplazar hacia ABAJO\n"
+                     "👇 Mano ABAJO → Desplazar hacia ARRIBA\n"
+                     "🤏 Junta ÍNDICE y PULGAR → HACER CLIC\n"
+                     "✊ Cierra puño o quita la mano → DETENER",
                 font=ctk.CTkFont(family="Inter", size=11),
                 text_color="#AAAAAA",
                 justify="left"
@@ -586,6 +603,16 @@ class MangaAutoscrollerApp(ctk.CTk):
 
     def on_gesture_sensitivity_changed(self, value):
         self.gesture_sensitivity = int(value)
+
+    def calibrate_hand_gesture(self):
+        self.calibrated_hand_y = None
+        self.calibrate_pending = True
+        self.hg_calibrate_btn.configure(text="Espera...", state="disabled")
+
+    def _on_hand_calibration_done(self):
+        self.hg_calibrate_btn.configure(
+            text=f"✅ Centro: {int(self.calibrated_hand_y)}px", state="disabled", fg_color="#888888"
+        )
 
     def on_hotkey_changed(self, value):
         self.selected_hotkey = value
@@ -717,6 +744,10 @@ class MangaAutoscrollerApp(ctk.CTk):
             # Iniciar hilo de cámara
             self.camera_active = True
             self.hand_stop_active = False
+            self.calibrated_hand_y = None
+            self.calibrate_pending = False
+            if self.camera_mode == "hand_gesture":
+                self.hg_calibrate_btn.configure(state="normal", text="📍 Calibrar Centro", fg_color="#2ECC71")
             self.camera_thread = threading.Thread(target=self.camera_worker, daemon=True)
             self.camera_thread.start()
         else:
@@ -726,9 +757,12 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.hg_status_badge.configure(text="SIN CONTROL", fg_color="#33333F", text_color="#888888")
             self.hg_pos_progressbar.set(0.5)
             self.hg_pos_label.configure(text="● Centro")
+            self.hg_calibrate_btn.configure(state="disabled", text="📍 Calibrar Centro", fg_color="#2ECC71")
             self.hand_detected = False
             self.hand_closed = False
             self.hand_stop_active = False
+            self.calibrated_hand_y = None
+            self.calibrate_pending = False
             
             # Detener scroll si estaba activo por la cámara
             if self.is_scrolling:
@@ -860,9 +894,10 @@ class MangaAutoscrollerApp(ctk.CTk):
 
     def _process_hand_gesture_mode(self, frame, hand_detector):
         h, w, _ = frame.shape
-        center_y = h // 2
         control_active = False
         hand_y = None
+        is_pinching = False
+        palm_center_y = None
 
         if MEDIPIPE_AVAILABLE and hand_detector:
             try:
@@ -888,45 +923,82 @@ class MangaAutoscrollerApp(ctk.CTk):
                     for point in lmList:
                         cv2.circle(frame, (point[0], point[1]), 5, (46, 204, 113), -1)
 
+                    palm_indices = [5, 9, 13, 17]
+                    palm_center_y = sum(lmList[i][1] for i in palm_indices) / len(palm_indices)
+                    hand_y = palm_center_y
+
+                    if self.calibrate_pending:
+                        self.calibrated_hand_y = palm_center_y
+                        self.calibrate_pending = False
+                        self.after(0, self._on_hand_calibration_done)
+
+                    dx = lmList[8][0] - lmList[4][0]
+                    dy = lmList[8][1] - lmList[4][1]
+                    pinch_dist = (dx * dx + dy * dy) ** 0.5
+                    is_pinching = pinch_dist < 25
+
                     index_extended = lmList[8][1] < lmList[6][1]
                     middle_extended = lmList[12][1] < lmList[10][1]
                     ring_extended = lmList[16][1] < lmList[14][1]
                     pinky_extended = lmList[20][1] < lmList[18][1]
-
                     extended_count = sum([index_extended, middle_extended, ring_extended, pinky_extended])
                     is_fist = extended_count <= 1
 
-                    control_active = index_extended and not is_fist
-                    hand_y = lmList[5][1]
+                    control_active = index_extended and not is_fist and not is_pinching
 
-                    cv2.circle(frame, (lmList[8][0], lmList[8][1]), 8, (0, 255, 255), -1)
-                    cv2.line(frame, (0, center_y), (w, center_y), (100, 100, 100), 1)
+                    if is_pinching:
+                        cv2.circle(frame, (lmList[4][0], lmList[4][1]), 12, (0, 0, 255), -1)
+                        cv2.circle(frame, (lmList[8][0], lmList[8][1]), 12, (0, 0, 255), -1)
+                        cv2.line(frame, (lmList[4][0], lmList[4][1]),
+                                 (lmList[8][0], lmList[8][1]), (0, 0, 255), 3)
+                        cv2.putText(frame, "CLICK!", (lmList[8][0] + 15, lmList[8][1]),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    else:
+                        cv2.circle(frame, (lmList[8][0], lmList[8][1]), 8, (0, 255, 255), -1)
+
+                    center_line = self.calibrated_hand_y if self.calibrated_hand_y is not None else h // 2
+                    cv2.line(frame, (0, int(center_line)), (w, int(center_line)), (100, 100, 100), 1)
             except Exception as e:
                 print(f"Error en detección de gestos: {e}")
 
-        self.after(0, self.update_hand_gesture_status_ui, control_active, hand_y)
+        self.pinch_detected = is_pinching
+        if is_pinching and not self.prev_pinch_detected:
+            try:
+                pyautogui.click()
+            except Exception:
+                pass
+        self.prev_pinch_detected = is_pinching
+
+        self.after(0, self.update_hand_gesture_status_ui, control_active, hand_y, is_pinching)
 
         if control_active and hand_y is not None:
+            center_y = self.calibrated_hand_y if self.calibrated_hand_y is not None else h // 2
             diff = hand_y - center_y
 
-            norm_diff = max(min(diff, 60), -60)
-            progress_val = 0.5 + (norm_diff / 120.0)
+            norm_diff = max(min(diff, 80), -80)
+            progress_val = 0.5 + (norm_diff / 160.0)
             self.after(0, lambda p=progress_val: self.hg_pos_progressbar.set(p))
 
-            if hand_y < center_y - self.gesture_sensitivity:
-                if not self.is_scrolling or self.scroll_direction != "Bajar":
+            abs_diff = abs(diff)
+            if abs_diff > self.gesture_sensitivity:
+                speed_factor = min(abs_diff / 40.0, 3.0)
+                self.scroll_amount = int(5 + speed_factor * 10)
+                self.scroll_interval = max(0.02, 0.08 - speed_factor * 0.018)
+
+                if hand_y < center_y - self.gesture_sensitivity:
                     self.scroll_direction = "Bajar"
-                    self.is_scrolling = True
-                    self.after(0, self.update_status_ui)
-                self.after(0, lambda d=diff: self.hg_pos_label.configure(
-                    text=f"▼ Bajando (mano arriba, dif: {d})"))
-            elif hand_y > center_y + self.gesture_sensitivity:
-                if not self.is_scrolling or self.scroll_direction != "Subir":
+                    if not self.is_scrolling:
+                        self.is_scrolling = True
+                        self.after(0, self.update_status_ui)
+                    self.after(0, lambda d=diff: self.hg_pos_label.configure(
+                        text=f"▼ Bajando  {speed_factor:.1f}x"))
+                else:
                     self.scroll_direction = "Subir"
-                    self.is_scrolling = True
-                    self.after(0, self.update_status_ui)
-                self.after(0, lambda d=diff: self.hg_pos_label.configure(
-                    text=f"▲ Subiendo (mano abajo, dif: {d})"))
+                    if not self.is_scrolling:
+                        self.is_scrolling = True
+                        self.after(0, self.update_status_ui)
+                    self.after(0, lambda d=diff: self.hg_pos_label.configure(
+                        text=f"▲ Subiendo  {speed_factor:.1f}x"))
             else:
                 if self.is_scrolling:
                     self.is_scrolling = False
@@ -940,14 +1012,18 @@ class MangaAutoscrollerApp(ctk.CTk):
             self.after(0, lambda: self.hg_pos_progressbar.set(0.5))
             if hand_y is None:
                 self.after(0, lambda: self.hg_pos_label.configure(text="○ Sin mano detectada"))
+            elif is_pinching:
+                self.after(0, lambda: self.hg_pos_label.configure(text="◎ CLIC realizado"))
             else:
                 self.after(0, lambda: self.hg_pos_label.configure(text="○ Gesto no válido"))
 
-    def update_hand_gesture_status_ui(self, control_active, hand_y):
+    def update_hand_gesture_status_ui(self, control_active, hand_y, is_pinching):
         if not self.camera_active:
             self.hg_status_badge.configure(text="CÁMARA APAGADA", fg_color="#33333F", text_color="#888888")
         elif hand_y is None:
             self.hg_status_badge.configure(text="MANO NO DETECTADA", fg_color="#CC3333", text_color="#FFFFFF")
+        elif is_pinching:
+            self.hg_status_badge.configure(text="¡CLICK!", fg_color="#FF5733", text_color="#FFFFFF")
         elif control_active:
             self.hg_status_badge.configure(text="CONTROL ACTIVO", fg_color="#2ECC71", text_color="#000000")
         else:
