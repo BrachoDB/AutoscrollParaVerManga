@@ -90,6 +90,11 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.mouse_smooth_x = 0.5
         self.mouse_smooth_y = 0.5
         self.mouse_last_valid = None
+        self._h_stable = {"hand": 0, "gesture": 0, "mouse": 0}
+        self._h_prev = {"hand": False, "gesture": False, "mouse": False}
+        self._gesture_auto_cal_samples = []
+        self._gesture_auto_calibrated = False
+        self._mouse_prev_pos = None
 
         # Configuración de interfaz
         self.setup_ui()
@@ -447,9 +452,9 @@ class MangaAutoscrollerApp(ctk.CTk):
 
             self.hand_instructions = ctk.CTkLabel(
                 self.hand_classic_controls_frame,
-                text="✋ Mano abierta (5 dedos) → BAJAR\n"
-                     "☝️ Solo índice extendido → SUBIR\n"
-                     "✊ Puño o cualquier otro gesto → DETENER",
+                text="✋ 3 dedos → BAJAR lento | 4→medio | 5→rápido\n"
+                     "☝️ Solo índice → SUBIR\n"
+                     "✊ Puño o menos de 3 dedos → DETENER",
                 font=ctk.CTkFont(family="Inter", size=11),
                 text_color="#AAAAAA",
                 justify="left"
@@ -868,7 +873,11 @@ class MangaAutoscrollerApp(ctk.CTk):
             self._frame_counter += 1
 
             # Redimensionar el frame para la vista previa de la UI (relación 4:3)
-            preview_w = int(min(320, self.video_frame.winfo_width())) if self.video_frame.winfo_width() > 10 else 240
+            try:
+                vf_w = self.video_frame.winfo_width()
+                preview_w = max(160, min(480, vf_w)) if vf_w > 20 else 240
+            except Exception:
+                preview_w = 240
             preview_h = int(preview_w * 3 / 4)
             frame_resized = cv2.resize(frame, (preview_w, preview_h))
             # Convertir frame BGR (OpenCV) a RGB y luego a formato PIL
@@ -890,6 +899,9 @@ class MangaAutoscrollerApp(ctk.CTk):
         self.hand_detected = False
         self.hand_closed = False
         gesture = "none"
+        hand_found = False
+        extended_count = 0
+        index_extended = False
 
         if MEDIPIPE_AVAILABLE and hand_detector:
             try:
@@ -898,7 +910,7 @@ class MangaAutoscrollerApp(ctk.CTk):
                 result = hand_detector.detect(mp_image)
 
                 if result.hand_landmarks:
-                    self.hand_detected = True
+                    hand_found = True
                     h, w, _ = frame.shape
                     hand_landmarks = result.hand_landmarks[0]
                     lmList = [[int(lm.x * w), int(lm.y * h), lm.z] for lm in hand_landmarks]
@@ -922,28 +934,44 @@ class MangaAutoscrollerApp(ctk.CTk):
                     ring_extended = lmList[16][1] < lmList[14][1]
                     pinky_extended = lmList[20][1] < lmList[18][1]
                     extended_count = sum([index_extended, middle_extended, ring_extended, pinky_extended])
-
                     is_fist = extended_count <= 1
                     self.hand_closed = is_fist
 
                     if extended_count >= 3:
                         gesture = "down"
-                        cv2.putText(frame, "BAJAR", (10, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (46, 204, 113), 2)
+                        speed_labels = {3: "LENTO", 4: "MEDIO", 5: "RÁPIDO"}
+                        label = speed_labels.get(extended_count, "BAJAR")
+                        color = (46, 204, 113) if extended_count <= 4 else (0, 255, 0)
+                        cv2.putText(frame, f"BAJAR {label}", (10, 30),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                        cv2.putText(frame, f"{extended_count} dedos", (10, 55),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
                     elif extended_count == 1 and index_extended:
                         gesture = "up"
                         cv2.putText(frame, "SUBIR", (10, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                    else:
-                        gesture = "none"
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.putText(frame, "1 dedo", (10, 55),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             except Exception as e:
                 print(f"Error en detección de manos (clásico): {e}")
+
+        if hand_found != self._h_prev["hand"]:
+            self._h_stable["hand"] = 0
+        else:
+            self._h_stable["hand"] = min(self._h_stable["hand"] + 1, 5)
+        self._h_prev["hand"] = hand_found
+
+        if self._h_stable["hand"] >= 2:
+            self.hand_detected = hand_found
+            gesture = gesture if hand_found else "none"
 
         self.after(0, self.update_hand_status_ui)
 
         if gesture == "down":
-            self.scroll_amount = 8
-            self.scroll_interval = 0.04
+            speed_map = {3: (8, 0.05), 4: (12, 0.035), 5: (18, 0.02)}
+            amt, interval = speed_map.get(extended_count, (8, 0.05))
+            self.scroll_amount = amt
+            self.scroll_interval = interval
             self.scroll_direction = "Bajar"
             if not self.is_scrolling:
                 self.is_scrolling = True
@@ -964,6 +992,7 @@ class MangaAutoscrollerApp(ctk.CTk):
         h, w, _ = frame.shape
         control_active = False
         hand_y = None
+        hand_found = False
 
         if MEDIPIPE_AVAILABLE and hand_detector:
             try:
@@ -972,6 +1001,7 @@ class MangaAutoscrollerApp(ctk.CTk):
                 result = hand_detector.detect(mp_image)
 
                 if result.hand_landmarks:
+                    hand_found = True
                     hand_landmarks = result.hand_landmarks[0]
                     lmList = [[int(lm.x * w), int(lm.y * h), lm.z] for lm in hand_landmarks]
 
@@ -993,10 +1023,16 @@ class MangaAutoscrollerApp(ctk.CTk):
                     palm_center_y = sum(lmList[i][1] for i in palm_indices) / len(palm_indices)
                     hand_y = palm_center_y
 
-                    if self.calibrate_pending:
-                        self.calibrated_hand_y = palm_center_y
-                        self.calibrate_pending = False
-                        self.after(0, self._on_hand_calibration_done)
+                    if not self._gesture_auto_calibrated:
+                        self._gesture_auto_cal_samples.append(palm_center_y)
+                        if len(self._gesture_auto_cal_samples) >= 15:
+                            self.calibrated_hand_y = sum(self._gesture_auto_cal_samples) / len(self._gesture_auto_cal_samples)
+                            self._gesture_auto_calibrated = True
+                            self.after(0, lambda: self.hg_calibrate_btn.configure(
+                                text=f"✅ Auto: {int(self.calibrated_hand_y)}px", state="disabled", fg_color="#888888"))
+                    else:
+                        rolling_avg = self.calibrated_hand_y * 0.95 + palm_center_y * 0.05
+                        self.calibrated_hand_y = rolling_avg
 
                     index_extended = lmList[8][1] < lmList[6][1]
                     middle_extended = lmList[12][1] < lmList[10][1]
@@ -1010,10 +1046,31 @@ class MangaAutoscrollerApp(ctk.CTk):
                     center_line = self.calibrated_hand_y if self.calibrated_hand_y is not None else h // 2
                     cv2.line(frame, (0, int(center_line)), (w, int(center_line)), (100, 100, 100), 1)
 
-                    cv2.putText(frame, "CONTROL", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (46, 204, 113), 2)
+                    if control_active:
+                        if hand_y < center_line:
+                            cv2.putText(frame, "▼", (w - 40, h - 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (46, 204, 113), 3)
+                        else:
+                            cv2.putText(frame, "▲", (w - 40, h - 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (46, 204, 113), 3)
             except Exception as e:
                 print(f"Error en detección de gestos: {e}")
+
+        if hand_found != self._h_prev["gesture"]:
+            self._h_stable["gesture"] = 0
+        else:
+            self._h_stable["gesture"] = min(self._h_stable["gesture"] + 1, 5)
+        self._h_prev["gesture"] = hand_found
+
+        if self._h_stable["gesture"] >= 2:
+            pass
+        else:
+            control_active = False if not hand_found else control_active
+            hand_y = None if not hand_found else hand_y
+
+        if not hand_found:
+            control_active = False
+            hand_y = None
 
         self.after(0, lambda: self.update_hand_gesture_status_ui(control_active, hand_y))
 
@@ -1071,9 +1128,8 @@ class MangaAutoscrollerApp(ctk.CTk):
         is_open_hand = False
         is_fist = True
         index_extended = False
-        cursor_x_norm = None
-        cursor_y_norm = None
         palm_center_y = None
+        cur_norm = None
 
         if MEDIPIPE_AVAILABLE and hand_detector:
             try:
@@ -1112,23 +1168,18 @@ class MangaAutoscrollerApp(ctk.CTk):
                     is_open_hand = extended_count >= 3
 
                     index_tip = lmList[8]
-                    raw_x = index_tip[0] / w
-                    raw_y = index_tip[1] / h
+                    raw_x_norm = index_tip[0] / w
+                    raw_y_norm = index_tip[1] / h
 
-                    usable_min = 0.12
-                    usable_max = 0.88
-                    rescaled_x = (raw_x - usable_min) / (usable_max - usable_min)
-                    rescaled_y = (raw_y - usable_min) / (usable_max - usable_min)
-
-                    cursor_x_norm = max(0.0, min(1.0, 1.0 - rescaled_x))
-                    cursor_y_norm = max(0.0, min(1.0, rescaled_y))
-
-                    self.mouse_last_valid = (cursor_x_norm, cursor_y_norm)
+                    cur_norm = (raw_x_norm, raw_y_norm)
 
                     dx = lmList[8][0] - lmList[4][0]
                     dy = lmList[8][1] - lmList[4][1]
                     pinch_dist = (dx * dx + dy * dy) ** 0.5
                     is_pinching = pinch_dist < 25
+
+                    cursor_display_x = int(raw_x_norm * 100)
+                    cursor_display_y = int(raw_y_norm * 100)
 
                     if is_pinching:
                         cv2.circle(frame, (lmList[4][0], lmList[4][1]), 12, (0, 0, 255), -1)
@@ -1138,27 +1189,38 @@ class MangaAutoscrollerApp(ctk.CTk):
                         cv2.putText(frame, "CLICK!", (lmList[8][0] + 15, lmList[8][1]),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                     elif index_extended and not is_fist:
-                        mx_display = int(cursor_x_norm * 100) if cursor_x_norm is not None else 50
-                        my_display = int(cursor_y_norm * 100) if cursor_y_norm is not None else 50
-                        cv2.putText(frame, f"({mx_display}%, {my_display}%)",
+                        cv2.putText(frame, f"[{cursor_display_x}%, {cursor_display_y}%]",
                                     (lmList[8][0] + 15, lmList[8][1]),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-
-                    if cursor_x_norm is not None:
-                        alpha = 0.5
-                        self.mouse_smooth_x = self.mouse_smooth_x * (1 - alpha) + cursor_x_norm * alpha
-                        self.mouse_smooth_y = self.mouse_smooth_y * (1 - alpha) + cursor_y_norm * alpha
             except Exception as e:
                 print(f"Error en Air Mouse: {e}")
 
-        if cursor_x_norm is not None and index_extended and not is_fist and not is_pinching:
+        if hand_found != self._h_prev["mouse"]:
+            self._h_stable["mouse"] = 0
+        else:
+            self._h_stable["mouse"] = min(self._h_stable["mouse"] + 1, 5)
+        self._h_prev["mouse"] = hand_found
+
+        if self._h_stable["mouse"] >= 2 and index_extended and not is_fist and not is_pinching and cur_norm is not None and self._mouse_prev_pos is not None:
+            dx_norm = cur_norm[0] - self._mouse_prev_pos[0]
+            dy_norm = cur_norm[1] - self._mouse_prev_pos[1]
+
+            speed = (dx_norm * dx_norm + dy_norm * dy_norm) ** 0.5
+            base_gain = 600
+            accel_gain = 3000
+            gain = base_gain + accel_gain * speed
+
             try:
                 screen_w, screen_h = pyautogui.size()
-                target_x = int(self.mouse_smooth_x * screen_w)
-                target_y = int(self.mouse_smooth_y * screen_h)
-                pyautogui.moveTo(target_x, target_y, duration=0.0)
+                move_x = int(dx_norm * gain * (screen_w / 320))
+                move_y = int(dy_norm * gain * (screen_h / 240))
+                if abs(move_x) > 0 or abs(move_y) > 0:
+                    pyautogui.moveRel(move_x, move_y)
             except Exception:
                 pass
+
+        if cur_norm is not None:
+            self._mouse_prev_pos = cur_norm
 
         self.pinch_detected = is_pinching
         if is_pinching and not self.prev_pinch_detected and hand_found:
@@ -1193,9 +1255,9 @@ class MangaAutoscrollerApp(ctk.CTk):
                 self.is_scrolling = False
                 self.after(0, self.update_status_ui)
 
-        self.after(0, self.update_hand_mouse_status_ui, hand_found, is_pinching, is_open_hand, is_fist, cursor_x_norm)
+        self.after(0, self.update_hand_mouse_status_ui, hand_found, is_pinching, is_open_hand, is_fist, cur_norm, index_extended)
 
-    def update_hand_mouse_status_ui(self, hand_found, is_pinching, is_open_hand, is_fist, cursor_x_norm):
+    def update_hand_mouse_status_ui(self, hand_found, is_pinching, is_open_hand, is_fist, cur_norm, index_extended=False):
         if not self.camera_active:
             self.hm_status_badge.configure(text="CÁMARA APAGADA", fg_color="#33333F", text_color="#888888")
             self.hm_pos_label.configure(text="● Esperando mano...")
@@ -1212,11 +1274,11 @@ class MangaAutoscrollerApp(ctk.CTk):
             icon = "▼" if self.scroll_direction == "Bajar" else "▲"
             self.hm_status_badge.configure(text=f"SCROLL {icon}", fg_color="#2ECC71", text_color="#000000")
             self.hm_pos_label.configure(text=f"🖐️ Desplazando {self.scroll_direction.lower()}")
-        elif cursor_x_norm is not None:
-            mx = int(self.mouse_smooth_x * 100)
-            my = int(self.mouse_smooth_y * 100)
-            self.hm_status_badge.configure(text=f"🐭 CURSOR ({mx}%, {my}%)", fg_color="#3498DB", text_color="#FFFFFF")
-            self.hm_pos_label.configure(text=f"☝️ ({mx}%, {my}%)")
+        elif cur_norm is not None and index_extended and not is_fist:
+            mx = int(cur_norm[0] * 100)
+            my = int(cur_norm[1] * 100)
+            self.hm_status_badge.configure(text=f"🐭 ({mx}%, {my}%)", fg_color="#3498DB", text_color="#FFFFFF")
+            self.hm_pos_label.configure(text=f"☝️ Moviendo cursor")
         else:
             self.hm_status_badge.configure(text="GESTO NO VÁLIDO", fg_color="#FFA500", text_color="#000000")
             self.hm_pos_label.configure(text="● Gesto no válido")
